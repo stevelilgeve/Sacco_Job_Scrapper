@@ -268,46 +268,85 @@ def send_email(jobs):
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
+def is_deadline_valid(deadline_str):
+    """Check if job deadline is still valid (not expired)"""
+    if not deadline_str or deadline_str == "Check application link":
+        return True  # Assume valid if deadline unknown
+    
+    try:
+        # Parse various date formats
+        current_date = date.today()
+        
+        # Try DD/MM/YYYY format
+        if '/' in deadline_str:
+            parts = deadline_str.split('/')
+            if len(parts) == 3:
+                day, month, year = int(parts[0]), int(parts[1]), int(parts[2])
+                deadline_date = date(year, month, day)
+                return deadline_date >= current_date
+        
+        return True  # Assume valid if can't parse
+    except:
+        return True  # Assume valid on error
+
 def main():
     log.info("🚀 Starting SACCO ICT Job Scraper (MyJobMag Focus)")
     
     seen_jobs = load_seen_jobs()
-    seen_job_ids = {job['id'] for job in seen_jobs}
-    new_jobs = []
+    seen_job_map = {job['id']: job for job in seen_jobs}  # Map by ID for quick lookup
+    jobs_to_email = []
+    all_found_jobs = []
     
     for source in SEARCH_SOURCES:
         jobs = scrape_myjobmag(source)
         
         for job in jobs:
             job_id = generate_job_id(job)
-            
-            if job_id in seen_job_ids:
-                log.info(f"  ⏭️ Skipping (already seen): {job['title'][:50]}...")
-                continue
-            
             job['id'] = job_id
-            job['date_found'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-            new_jobs.append(job)
-            seen_job_ids.add(job_id)
+            all_found_jobs.append(job)
+            
+            # Check if we've seen this job before
+            if job_id in seen_job_map:
+                # Already seen - check if deadline still valid
+                seen_job = seen_job_map[job_id]
+                if is_deadline_valid(job.get('deadline')):
+                    # Job still active, include it
+                    log.info(f"  🔄 Including (still active): {job['title'][:50]}...")
+                    jobs_to_email.append(job)
+                else:
+                    log.info(f"  ⏭️ Skipping (deadline expired): {job['title'][:50]}...")
+            else:
+                # New job - always include
+                log.info(f"  ✨ New job: {job['title'][:50]}...")
+                job['first_seen'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                jobs_to_email.append(job)
     
-    if new_jobs:
-        log.info(f"📧 Sending email with {len(new_jobs)} new SACCO ICT jobs")
-        send_email(new_jobs)
+    if jobs_to_email:
+        # Remove duplicates (keep latest version)
+        unique_jobs = {}
+        for job in jobs_to_email:
+            unique_jobs[job['id']] = job
+        jobs_to_email = list(unique_jobs.values())
         
-        # Save updated seen jobs
-        seen_jobs.extend(new_jobs)
+        log.info(f"📧 Sending email with {len(jobs_to_email)} SACCO ICT jobs")
+        send_email(jobs_to_email)
+        
+        # Update seen jobs with all found jobs
+        for job in all_found_jobs:
+            if job['id'] not in seen_job_map:
+                seen_jobs.append(job)
         save_seen_jobs(seen_jobs)
         
-        # Save to Excel as backup
+        # Save to Excel
         try:
-            df = pd.DataFrame(new_jobs)
+            df = pd.DataFrame(jobs_to_email)
             df.to_excel("sacco_ict_jobs.xlsx", index=False)
             log.info("📊 Saved jobs to sacco_ict_jobs.xlsx")
         except Exception as e:
             log.warning(f"Could not save Excel: {e}")
         
     else:
-        log.info("📭 No new SACCO ICT jobs found on MyJobMag")
+        log.info("📭 No SACCO ICT jobs found (or all deadlines expired)")
 
 if __name__ == "__main__":
     main()
