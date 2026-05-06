@@ -289,13 +289,51 @@ def is_deadline_valid(deadline_str):
     except:
         return True  # Assume valid on error
 
+def get_current_month_year():
+    """Get current month and year as string"""
+    now = datetime.now()
+    return f"{now.year}-{now.month:02d}"
+
+def load_sent_jobs():
+    """Load list of jobs already sent this month"""
+    current_month = get_current_month_year()
+    sent_file = f"sent_jobs_{current_month}.json"
+    
+    if os.path.exists(sent_file):
+        with open(sent_file, 'r') as f:
+            return set(json.load(f))  # Return set of job IDs
+    return set()
+
+def save_sent_jobs(sent_job_ids):
+    """Save list of jobs sent this month"""
+    current_month = get_current_month_year()
+    sent_file = f"sent_jobs_{current_month}.json"
+    
+    with open(sent_file, 'w') as f:
+        json.dump(list(sent_job_ids), f)
+
+def is_posted_this_month(job):
+    """Check if job was posted in current month (or assume yes if unknown)"""
+    # For now, assume all found jobs are current since MyJobMag shows current listings
+    # Could be enhanced to parse actual posting dates if available in HTML
+    return True
+
 def main():
     log.info("🚀 Starting SACCO ICT Job Scraper (MyJobMag Focus)")
     
+    current_month_year = get_current_month_year()
+    log.info(f"📅 Current month: {current_month_year}")
+    
+    # Load jobs already sent this month
+    sent_job_ids = load_sent_jobs()
+    log.info(f"📧 Already sent this month: {len(sent_job_ids)} jobs")
+    
+    # Load all previously seen jobs
     seen_jobs = load_seen_jobs()
-    seen_job_map = {job['id']: job for job in seen_jobs}  # Map by ID for quick lookup
+    seen_job_ids = {job['id'] for job in seen_jobs}
+    
     jobs_to_email = []
-    all_found_jobs = []
+    new_jobs_found = []
     
     for source in SEARCH_SOURCES:
         jobs = scrape_myjobmag(source)
@@ -303,50 +341,49 @@ def main():
         for job in jobs:
             job_id = generate_job_id(job)
             job['id'] = job_id
-            all_found_jobs.append(job)
             
-            # Check if we've seen this job before
-            if job_id in seen_job_map:
-                # Already seen - check if deadline still valid
-                seen_job = seen_job_map[job_id]
-                if is_deadline_valid(job.get('deadline')):
-                    # Job still active, include it
-                    log.info(f"  🔄 Including (still active): {job['title'][:50]}...")
-                    jobs_to_email.append(job)
-                else:
-                    log.info(f"  ⏭️ Skipping (deadline expired): {job['title'][:50]}...")
-            else:
-                # New job - always include
-                log.info(f"  ✨ New job: {job['title'][:50]}...")
-                job['first_seen'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                jobs_to_email.append(job)
+            # Check if already sent this month
+            if job_id in sent_job_ids:
+                log.info(f"  ⏭️ Already sent this month: {job['title'][:50]}...")
+                continue
+            
+            # Check if posted in current month
+            if not is_posted_this_month(job):
+                log.info(f"  ⏭️ Not current month: {job['title'][:50]}...")
+                continue
+            
+            # New job to send
+            log.info(f"  ✨ New job to send: {job['title'][:50]}...")
+            job['found_date'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            jobs_to_email.append(job)
+            sent_job_ids.add(job_id)
+            
+            # Track if this is truly new (never seen before)
+            if job_id not in seen_job_ids:
+                new_jobs_found.append(job)
     
     if jobs_to_email:
-        # Remove duplicates (keep latest version)
-        unique_jobs = {}
-        for job in jobs_to_email:
-            unique_jobs[job['id']] = job
-        jobs_to_email = list(unique_jobs.values())
-        
-        log.info(f"📧 Sending email with {len(jobs_to_email)} SACCO ICT jobs")
+        log.info(f"📧 Sending email with {len(jobs_to_email)} new SACCO ICT jobs")
         send_email(jobs_to_email)
         
-        # Update seen jobs with all found jobs
-        for job in all_found_jobs:
-            if job['id'] not in seen_job_map:
-                seen_jobs.append(job)
+        # Save updated sent jobs list
+        save_sent_jobs(sent_job_ids)
+        
+        # Update seen jobs with truly new jobs
+        for job in new_jobs_found:
+            seen_jobs.append(job)
         save_seen_jobs(seen_jobs)
         
         # Save to Excel
         try:
             df = pd.DataFrame(jobs_to_email)
-            df.to_excel("sacco_ict_jobs.xlsx", index=False)
-            log.info("📊 Saved jobs to sacco_ict_jobs.xlsx")
+            df.to_excel(f"sacco_ict_jobs_{current_month_year}.xlsx", index=False)
+            log.info(f"📊 Saved jobs to sacco_ict_jobs_{current_month_year}.xlsx")
         except Exception as e:
             log.warning(f"Could not save Excel: {e}")
         
     else:
-        log.info("📭 No SACCO ICT jobs found (or all deadlines expired)")
+        log.info(f"📭 No new SACCO ICT jobs to send (already sent {len(sent_job_ids)} this month)")
 
 if __name__ == "__main__":
     main()

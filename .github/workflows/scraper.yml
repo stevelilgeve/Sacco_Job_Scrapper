@@ -15,14 +15,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Restore seen-jobs cache (so we don't re-email old jobs) ────────
-      - name: Restore seen jobs cache
+      # ── 2. Restore seen-jobs and sent-jobs cache ───────────────────────────
+      - name: Restore jobs cache
         uses: actions/cache@v4
         with:
-          path: seen_jobs.json
-          key: seen-jobs-${{ runner.os }}-${{ github.run_id }}
+          path: |
+            seen_jobs.json
+            sent_jobs_*.json
+          key: jobs-cache-${{ runner.os }}-${{ github.run_id }}
           restore-keys: |
-            seen-jobs-${{ runner.os }}-
+            jobs-cache-${{ runner.os }}-
 
       # ── 3. Set up Python ──────────────────────────────────────────────────
       - name: Set up Python 3.11
@@ -42,10 +44,12 @@ jobs:
           RECIPIENT_EMAIL:   ${{ secrets.RECIPIENT_EMAIL }}
         run: python sacco_scraper.py
 
-      # ── 6. Save updated seen-jobs cache ───────────────────────────────────
-      - name: Save seen jobs cache
+      # ── 6. Save updated jobs cache ────────────────────────────────────────
+      - name: Save jobs cache
         uses: actions/cache@v4
         if: always()
         with:
-          path: seen_jobs.json
-          key: seen-jobs-${{ runner.os }}-${{ github.run_id }}
+          path: |
+            seen_jobs.json
+            sent_jobs_*.json
+          key: jobs-cache-${{ runner.os }}-${{ github.run_id }}
