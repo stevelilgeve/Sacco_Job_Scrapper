@@ -36,19 +36,19 @@ SACCO_KEYWORDS = [
 ]
 
 # ── Job Sources ──────────────────────────────────────────────────────────────
-# Will scrape pages 1-10 for each source
+# Will scrape pages 1-6 for each source
 SEARCH_SOURCES = [
     {
         "name": "MyJobMag ICT Jobs",
         "base_url": "https://www.myjobmag.co.ke",
         "url_template": "https://www.myjobmag.co.ke/jobs-by-field/information-technology/{page}",
-        "max_pages": 10
+        "max_pages": 6
     },
     {
         "name": "MyJobMag SACCO Jobs", 
         "base_url": "https://www.myjobmag.co.ke",
         "url_template": "https://www.myjobmag.co.ke/jobs-by-field/saco/{page}",
-        "max_pages": 10
+        "max_pages": 6
     }
 ]
 
@@ -256,16 +256,12 @@ def scrape_myjobmag(source):
     all_job_links = []
     jobs = []
     
-    log.info(f"🔍 Scraping {source['name']} (up to {source['max_pages']} pages)")
+    log.info(f"🔍 Scraping {source['name']} (all {source['max_pages']} pages)")
     
-    # Collect job links from all pages
+    # Collect job links from all pages (no early stopping)
     for page_num in range(1, source['max_pages'] + 1):
-        page_links, has_more = scrape_page(source, page_num)
+        page_links, _ = scrape_page(source, page_num)
         all_job_links.extend(page_links)
-        
-        if not has_more:
-            log.info(f"  🛑 Stopping at page {page_num} (no more results)")
-            break
     
     # Remove duplicates across all pages
     unique_links = []
