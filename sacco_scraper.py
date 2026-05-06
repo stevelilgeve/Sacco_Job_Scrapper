@@ -36,16 +36,19 @@ SACCO_KEYWORDS = [
 ]
 
 # ── Job Sources ──────────────────────────────────────────────────────────────
+# Will scrape pages 1-10 for each source
 SEARCH_SOURCES = [
     {
         "name": "MyJobMag ICT Jobs",
-        "url": "https://www.myjobmag.co.ke/jobs-by-field/information-technology",
-        "base_url": "https://www.myjobmag.co.ke"
+        "base_url": "https://www.myjobmag.co.ke",
+        "url_template": "https://www.myjobmag.co.ke/jobs-by-field/information-technology?page={page}",
+        "max_pages": 10
     },
     {
         "name": "MyJobMag SACCO Jobs",
-        "url": "https://www.myjobmag.co.ke/jobs-by-field/saco",
-        "base_url": "https://www.myjobmag.co.ke"
+        "base_url": "https://www.myjobmag.co.ke",
+        "url_template": "https://www.myjobmag.co.ke/jobs-by-field/saco?page={page}",
+        "max_pages": 10
     }
 ]
 
@@ -198,21 +201,30 @@ def get_job_details(job_url):
         log.warning(f"    ⚠️ Error visiting job page: {e}")
         return None
 
-def scrape_myjobmag(source):
-    """Scrape jobs from MyJobMag - get links from listing, details from job pages"""
-    jobs = []
+def scrape_page(source, page_num):
+    """Scrape a single page for job links"""
+    job_links = []
     
     try:
-        log.info(f"🔍 Fetching job list: {source['name']}")
-        response = requests.get(source['url'], headers=HEADERS, timeout=20)
-        response.raise_for_status()
+        # Build URL with page number
+        if page_num == 1:
+            # First page might not need ?page=1
+            url = source['url_template'].replace("?page={page}", "").replace("&page={page}", "")
+        else:
+            url = source['url_template'].format(page=page_num)
         
+        log.info(f"  � Fetching page {page_num}: {url[:80]}...")
+        response = requests.get(url, headers=HEADERS, timeout=20)
+        
+        if response.status_code == 404:
+            log.info(f"    ⚠️ Page {page_num} not found (end of results)")
+            return job_links, False  # No more pages
+        
+        response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         
         # Find all job links on the page
-        job_links = []
-        
-        # Look for links containing /job/
+        page_job_count = 0
         for link in soup.select('a[href*="/job/"]'):
             href = link.get('href', '')
             if href and '/job/' in href:
@@ -222,49 +234,83 @@ def scrape_myjobmag(source):
                 # Remove duplicates
                 if href not in [j['link'] for j in job_links]:
                     job_links.append({'link': href, 'title': link.get_text(strip=True)})
+                    page_job_count += 1
         
-        log.info(f"  → Found {len(job_links)} job links")
+        log.info(f"    → Found {page_job_count} jobs on page {page_num}")
         
-        if not job_links:
-            log.warning(f"  ⚠️ No job links found!")
-            return jobs
+        # Check if page has jobs or if we've reached the end
+        if page_job_count == 0:
+            return job_links, False  # No more pages
         
-        sacco_jobs_found = 0
-        
-        # Visit each job page to get details
-        for job_info in job_links[:15]:  # Limit to first 15 to avoid timeouts
-            try:
-                # Get full details from job page
-                details = get_job_details(job_info['link'])
-                
-                if not details:
-                    continue
-                
-                if not details['is_sacco']:
-                    log.info(f"  ⏭️ SKIPPED (not SACCO): {details['title'][:50]}...")
-                    continue
-                
-                sacco_jobs_found += 1
-                log.info(f"  ✅ SACCO JOB #{sacco_jobs_found}: {details['title'][:50]}...")
-                
-                jobs.append({
-                    'title': details['title'],
-                    'employer': details['employer'],
-                    'deadline': details['deadline'],
-                    'location': "Kenya",
-                    'source': source['name'],
-                    'link': job_info['link'],
-                    'snippet': details['description']
-                })
-                
-            except Exception as e:
-                log.warning(f"  ⚠️ Error processing job: {e}")
-                continue
+        return job_links, True  # More pages may exist
         
     except Exception as e:
-        log.error(f"❌ Error fetching {source['name']}: {e}")
+        log.warning(f"    ⚠️ Error fetching page {page_num}: {e}")
+        return job_links, False
+
+def scrape_myjobmag(source):
+    """Scrape jobs from MyJobMag - get links from listing pages 1-10, details from job pages"""
+    all_job_links = []
+    jobs = []
     
-    log.info(f"  📊 SUMMARY: {sacco_jobs_found} SACCO jobs found from {len(job_links)} total jobs")
+    log.info(f"🔍 Scraping {source['name']} (up to {source['max_pages']} pages)")
+    
+    # Collect job links from all pages
+    for page_num in range(1, source['max_pages'] + 1):
+        page_links, has_more = scrape_page(source, page_num)
+        all_job_links.extend(page_links)
+        
+        if not has_more:
+            log.info(f"  🛑 Stopping at page {page_num} (no more results)")
+            break
+    
+    # Remove duplicates across all pages
+    unique_links = []
+    seen_urls = set()
+    for job_info in all_job_links:
+        if job_info['link'] not in seen_urls:
+            unique_links.append(job_info)
+            seen_urls.add(job_info['link'])
+    
+    log.info(f"  📊 Total unique jobs found: {len(unique_links)} from {source['max_pages']} pages")
+    
+    if not unique_links:
+        log.warning(f"  ⚠️ No job links found across all pages!")
+        return jobs
+    
+    sacco_jobs_found = 0
+    
+    # Visit each job page to get details (limit to first 30 to avoid timeouts)
+    for job_info in unique_links[:30]:
+        try:
+            # Get full details from job page
+            details = get_job_details(job_info['link'])
+            
+            if not details:
+                continue
+            
+            if not details['is_sacco']:
+                log.info(f"  ⏭️ SKIPPED (not SACCO): {details['title'][:50]}...")
+                continue
+            
+            sacco_jobs_found += 1
+            log.info(f"  ✅ SACCO JOB #{sacco_jobs_found}: {details['title'][:50]}...")
+            
+            jobs.append({
+                'title': details['title'],
+                'employer': details['employer'],
+                'deadline': details['deadline'],
+                'location': "Kenya",
+                'source': source['name'],
+                'link': job_info['link'],
+                'snippet': details['description']
+            })
+            
+        except Exception as e:
+            log.warning(f"  ⚠️ Error processing job: {e}")
+            continue
+    
+    log.info(f"  📊 FINAL SUMMARY: {sacco_jobs_found} SACCO jobs from {len(unique_links)} total jobs")
     
     return jobs
 
