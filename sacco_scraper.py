@@ -41,13 +41,13 @@ SEARCH_SOURCES = [
     {
         "name": "MyJobMag ICT Jobs",
         "base_url": "https://www.myjobmag.co.ke",
-        "url_template": "https://www.myjobmag.co.ke/jobs-by-field/information-technology?page={page}",
+        "url_template": "https://www.myjobmag.co.ke/jobs-by-field/information-technology/{page}",
         "max_pages": 10
     },
     {
-        "name": "MyJobMag SACCO Jobs",
+        "name": "MyJobMag SACCO Jobs", 
         "base_url": "https://www.myjobmag.co.ke",
-        "url_template": "https://www.myjobmag.co.ke/jobs-by-field/saco?page={page}",
+        "url_template": "https://www.myjobmag.co.ke/jobs-by-field/saco/{page}",
         "max_pages": 10
     }
 ]
@@ -207,13 +207,16 @@ def scrape_page(source, page_num):
     
     try:
         # Build URL with page number
+        # MyJobMag uses: /jobs-by-field/information-technology/ for page 1
+        # and /jobs-by-field/information-technology/2/ for page 2, etc.
         if page_num == 1:
-            # First page might not need ?page=1
-            url = source['url_template'].replace("?page={page}", "").replace("&page={page}", "")
+            # First page - use base URL without page number
+            url = source['url_template'].replace("/{page}", "")
         else:
+            # Pages 2+ - add page number
             url = source['url_template'].format(page=page_num)
         
-        log.info(f"  � Fetching page {page_num}: {url[:80]}...")
+        log.info(f"  📄 Fetching page {page_num}: {url[:80]}...")
         response = requests.get(url, headers=HEADERS, timeout=20)
         
         if response.status_code == 404:
