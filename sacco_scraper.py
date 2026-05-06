@@ -131,145 +131,140 @@ def extract_deadline(text):
     
     return None
 
-def scrape_myjobmag(source):
-    """Scrape jobs from MyJobMag"""
-    jobs = []
-    
+def get_job_details(job_url):
+    """Visit individual job page and extract full details"""
     try:
-        log.info(f"🔍 Fetching: {source['name']}")
-        response = requests.get(source['url'], headers=HEADERS, timeout=20)
+        log.info(f"    � Visiting job page: {job_url[:60]}...")
+        response = requests.get(job_url, headers=HEADERS, timeout=15)
         response.raise_for_status()
-        
-        # Save HTML for debugging
-        debug_filename = f"debug_{source['name'].replace(' ', '_').lower()}.html"
-        with open(debug_filename, 'w', encoding='utf-8') as f:
-            f.write(response.text)
-        log.info(f"  💾 Saved debug HTML: {debug_filename}")
         
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Try multiple job card selectors
-        selectors_to_try = [
-            '.job-list-item',
-            '.job-item', 
-            'article.job',
-            'div.job-listing',
-            'li.job',
-            '.mag-b',
-            '.job-list-section',
-            '.job-card',
-            '[class*="job"]',
-            'li'  # Fallback - try all list items
+        # Extract job title
+        title = "Unknown"
+        title_elem = (soup.select_one('h1') or 
+                     soup.select_one('h2.job-title') or
+                     soup.select_one('.job-title') or
+                     soup.select_one('h2'))
+        if title_elem:
+            title = title_elem.get_text(strip=True)
+        
+        # Extract employer/company
+        employer = "Unknown"
+        employer_elem = (soup.select_one('.company-name') or
+                        soup.select_one('.employer') or
+                        soup.select_one('[class*="company"]') or
+                        soup.select_one('h3'))
+        if employer_elem:
+            employer = employer_elem.get_text(strip=True)
+        
+        # Extract full job description
+        description = ""
+        desc_elem = (soup.select_one('.job-description') or
+                    soup.select_one('.description') or
+                    soup.select_one('[class*="desc"]') or
+                    soup.select_one('article') or
+                    soup.select_one('.content'))
+        if desc_elem:
+            description = desc_elem.get_text(strip=True)
+        
+        # Extract deadline from page
+        deadline = None
+        deadline_patterns = [
+            r'(?:deadline|closing date|apply by)[:\s]*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})',
+            r'(?:deadline|closing date|apply by)[:\s]*(\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4})',
+            r'(?:deadline|closing date|apply by)[:\s]*((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4})',
         ]
         
-        job_cards = []
-        for selector in selectors_to_try:
-            job_cards = soup.select(selector)
-            if job_cards:
-                log.info(f"  → Found {len(job_cards)} cards with selector: {selector}")
+        page_text = soup.get_text()
+        for pattern in deadline_patterns:
+            match = re.search(pattern, page_text, re.IGNORECASE)
+            if match:
+                deadline = match.group(1)
                 break
         
-        if not job_cards:
-            log.warning(f"  ⚠️ No job cards found with any selector!")
+        # Check if SACCO-related from full page content
+        is_sacco = is_sacco_related(f"{title} {employer} {description}".lower())
+        
+        return {
+            'title': title,
+            'employer': employer,
+            'description': description[:500] + "..." if len(description) > 500 else description,
+            'deadline': deadline or "Check job page",
+            'is_sacco': is_sacco
+        }
+        
+    except Exception as e:
+        log.warning(f"    ⚠️ Error visiting job page: {e}")
+        return None
+
+def scrape_myjobmag(source):
+    """Scrape jobs from MyJobMag - get links from listing, details from job pages"""
+    jobs = []
+    
+    try:
+        log.info(f"🔍 Fetching job list: {source['name']}")
+        response = requests.get(source['url'], headers=HEADERS, timeout=20)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Find all job links on the page
+        job_links = []
+        
+        # Look for links containing /job/
+        for link in soup.select('a[href*="/job/"]'):
+            href = link.get('href', '')
+            if href and '/job/' in href:
+                # Make absolute URL
+                if not href.startswith('http'):
+                    href = source['base_url'] + href
+                # Remove duplicates
+                if href not in [j['link'] for j in job_links]:
+                    job_links.append({'link': href, 'title': link.get_text(strip=True)})
+        
+        log.info(f"  → Found {len(job_links)} job links")
+        
+        if not job_links:
+            log.warning(f"  ⚠️ No job links found!")
             return jobs
         
         sacco_jobs_found = 0
-        non_sacco_skipped = 0
         
-        for i, card in enumerate(job_cards):
+        # Visit each job page to get details
+        for job_info in job_links[:15]:  # Limit to first 15 to avoid timeouts
             try:
-                # Extract title - try multiple selectors
-                title_elem = (card.select_one('h2 a') or 
-                             card.select_one('h3 a') or 
-                             card.select_one('h2') or
-                             card.select_one('h3') or
-                             card.select_one('.job-title a') or
-                             card.select_one('a[href*="/job/"]') or
-                             card.select_one('a'))
+                # Get full details from job page
+                details = get_job_details(job_info['link'])
                 
-                if not title_elem:
+                if not details:
                     continue
                 
-                title = title_elem.get_text(strip=True)
-                link = title_elem.get('href', '') if title_elem.name == 'a' else ''
-                
-                # Find link in parent if not on title element
-                if not link:
-                    parent_link = card.select_one('a[href*="/job/"]') or card.select_one('a')
-                    if parent_link:
-                        link = parent_link.get('href', '')
-                
-                # Make link absolute
-                if link and not link.startswith('http'):
-                    link = source['base_url'] + link
-                
-                if not link or not title:
-                    continue
-                
-                # Extract employer
-                employer_elem = (card.select_one('.company-name') or 
-                                 card.select_one('.employer') or
-                                 card.select_one('.job-company') or
-                                 card.select_one('[class*="company"]') or
-                                 card.select_one('span'))
-                
-                employer = employer_elem.get_text(strip=True) if employer_elem else "Unknown"
-                
-                # Extract snippet/description
-                snippet_elem = (card.select_one('.job-desc') or 
-                               card.select_one('.job-summary') or
-                               card.select_one('.description') or
-                               card.select_one('p'))
-                
-                snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
-                
-                # Check if SACCO-related
-                full_text = f"{title} {employer} {snippet}".lower()
-                is_sacco = is_sacco_related(full_text)
-                
-                if not is_sacco:
-                    non_sacco_skipped += 1
-                    if i < 3:  # Log first few skipped for debugging
-                        log.info(f"  ⏭️ SKIPPED (not SACCO): {title[:60]}...")
+                if not details['is_sacco']:
+                    log.info(f"  ⏭️ SKIPPED (not SACCO): {details['title'][:50]}...")
                     continue
                 
                 sacco_jobs_found += 1
-                log.info(f"  ✅ SACCO JOB #{sacco_jobs_found}: {title[:60]}...")
-                
-                # Extract deadline
-                deadline_text = ""
-                deadline_elem = (card.select_one('.deadline') or 
-                                card.select_one('.job-deadline') or
-                                card.select_one('[class*="date"]') or
-                                card.select_one('[class*="deadline"]'))
-                
-                if deadline_elem:
-                    deadline_text = deadline_elem.get_text(strip=True)
-                
-                deadline = extract_deadline(deadline_text) or extract_deadline(snippet)
+                log.info(f"  ✅ SACCO JOB #{sacco_jobs_found}: {details['title'][:50]}...")
                 
                 jobs.append({
-                    'title': title,
-                    'employer': employer,
-                    'deadline': deadline or "Check application link",
+                    'title': details['title'],
+                    'employer': details['employer'],
+                    'deadline': details['deadline'],
                     'location': "Kenya",
                     'source': source['name'],
-                    'link': link,
-                    'snippet': snippet[:200] + "..." if len(snippet) > 200 else snippet
+                    'link': job_info['link'],
+                    'snippet': details['description']
                 })
                 
-                log.info(f"  ✅ SACCO Job: {title[:60]}...")
-                
             except Exception as e:
-                log.warning(f"  ⚠️ Error parsing job card: {e}")
+                log.warning(f"  ⚠️ Error processing job: {e}")
                 continue
         
     except Exception as e:
         log.error(f"❌ Error fetching {source['name']}: {e}")
     
-    # Summary logging
-    total_processed = sacco_jobs_found + non_sacco_skipped
-    log.info(f"  📊 SUMMARY: {sacco_jobs_found} SACCO jobs, {non_sacco_skipped} skipped (total: {total_processed})")
+    log.info(f"  📊 SUMMARY: {sacco_jobs_found} SACCO jobs found from {len(job_links)} total jobs")
     
     return jobs
 
