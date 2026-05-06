@@ -58,7 +58,7 @@ SEARCH_SOURCES = [
     },
     {
         "name": "MyJobMag Kenya",
-        "url": "https://www.myjobmag.co.ke/jobs-in/information-technology/kenya",
+        "url": "https://www.myjobmag.co.ke/jobs-by-field/information-technology",
         "type": "myjobmag"
     },
     {
@@ -66,21 +66,21 @@ SEARCH_SOURCES = [
         "url": "https://www.fuzu.com/kenya/jobs?industry=Information+Technology",
         "type": "fuzu"
     },
-    {
-        "name": "NGO Recruitment Kenya",
-        "url": "https://ngorecruitment.org/category/ict/",
-        "type": "ngorecruitment"
-    },
-    {
-        "name": "Career Point Kenya",
-        "url": "https://careerpointkenya.co.ke/?s=sacco+ict",
-        "type": "generic"
-    },
-    {
-        "name": "Jobs in Kenya",
-        "url": "https://www.jobsinkenya.co.ke/search/?q=sacco+ict",
-        "type": "generic"
-    },
+    # {
+    #     "name": "NGO Recruitment Kenya",
+    #     "url": "https://ngorecruitment.org/category/ict/",
+    #     "type": "ngorecruitment"
+    # },
+    # {
+    #     "name": "Career Point Kenya",
+    #     "url": "https://careerpointkenya.co.ke/?s=sacco+ict",
+    #     "type": "generic"
+    # },
+    # {
+    #     "name": "Jobs in Kenya",
+    #     "url": "https://www.jobsinkenya.co.ke/search/?q=sacco+ict",
+    #     "type": "generic"
+    # },
 ]
 
 HEADERS = {
