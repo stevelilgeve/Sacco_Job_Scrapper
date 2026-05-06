@@ -138,56 +138,101 @@ def scrape_myjobmag(source):
         response = requests.get(source['url'], headers=HEADERS, timeout=20)
         response.raise_for_status()
         
+        # Save HTML for debugging
+        debug_filename = f"debug_{source['name'].replace(' ', '_').lower()}.html"
+        with open(debug_filename, 'w', encoding='utf-8') as f:
+            f.write(response.text)
+        log.info(f"  💾 Saved debug HTML: {debug_filename}")
+        
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # MyJobMag job cards
-        job_cards = soup.select('.job-list-item, .job-item, article.job, div.job-listing')
+        # Try multiple job card selectors
+        selectors_to_try = [
+            '.job-list-item',
+            '.job-item', 
+            'article.job',
+            'div.job-listing',
+            'li.job',
+            '.mag-b',
+            '.job-list-section',
+            '.job-card',
+            '[class*="job"]',
+            'li'  # Fallback - try all list items
+        ]
+        
+        job_cards = []
+        for selector in selectors_to_try:
+            job_cards = soup.select(selector)
+            if job_cards:
+                log.info(f"  → Found {len(job_cards)} cards with selector: {selector}")
+                break
         
         if not job_cards:
-            # Try alternative selectors
-            job_cards = soup.select('li.job, .mag-b, .job-list-section')
+            log.warning(f"  ⚠️ No job cards found with any selector!")
+            return jobs
         
-        log.info(f"  → Found {len(job_cards)} job cards")
+        sacco_jobs_found = 0
+        non_sacco_skipped = 0
         
-        for card in job_cards:
+        for i, card in enumerate(job_cards):
             try:
-                # Extract title
+                # Extract title - try multiple selectors
                 title_elem = (card.select_one('h2 a') or 
                              card.select_one('h3 a') or 
+                             card.select_one('h2') or
+                             card.select_one('h3') or
                              card.select_one('.job-title a') or
-                             card.select_one('a[href*="/job/"]'))
+                             card.select_one('a[href*="/job/"]') or
+                             card.select_one('a'))
                 
                 if not title_elem:
                     continue
                 
                 title = title_elem.get_text(strip=True)
-                link = title_elem.get('href', '')
+                link = title_elem.get('href', '') if title_elem.name == 'a' else ''
+                
+                # Find link in parent if not on title element
+                if not link:
+                    parent_link = card.select_one('a[href*="/job/"]') or card.select_one('a')
+                    if parent_link:
+                        link = parent_link.get('href', '')
                 
                 # Make link absolute
                 if link and not link.startswith('http'):
                     link = source['base_url'] + link
+                
+                if not link or not title:
+                    continue
                 
                 # Extract employer
                 employer_elem = (card.select_one('.company-name') or 
                                  card.select_one('.employer') or
                                  card.select_one('.job-company') or
                                  card.select_one('[class*="company"]') or
-                                 card.select_one('span:not([class])'))
+                                 card.select_one('span'))
                 
                 employer = employer_elem.get_text(strip=True) if employer_elem else "Unknown"
                 
                 # Extract snippet/description
                 snippet_elem = (card.select_one('.job-desc') or 
                                card.select_one('.job-summary') or
-                               card.select_one('p') or
-                               card.select_one('.description'))
+                               card.select_one('.description') or
+                               card.select_one('p'))
                 
                 snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
                 
                 # Check if SACCO-related
-                full_text = f"{title} {employer} {snippet}"
-                if not is_sacco_related(full_text):
-                    continue  # Skip non-SACCO jobs
+                full_text = f"{title} {employer} {snippet}".lower()
+                is_sacco = is_sacco_related(full_text)
+                
+                if not is_sacco:
+                    non_sacco_skipped += 1
+                    if i < 3:  # Log first few skipped for debugging
+                        log.info(f"  ⏭️ SKIPPED (not SACCO): {title[:60]}...")
+                    continue
+                
+                sacco_jobs_found += 1
+                log.info(f"  ✅ SACCO JOB #{sacco_jobs_found}: {title[:60]}...")
                 
                 # Extract deadline
                 deadline_text = ""
@@ -219,6 +264,10 @@ def scrape_myjobmag(source):
         
     except Exception as e:
         log.error(f"❌ Error fetching {source['name']}: {e}")
+    
+    # Summary logging
+    total_processed = sacco_jobs_found + non_sacco_skipped
+    log.info(f"  📊 SUMMARY: {sacco_jobs_found} SACCO jobs, {non_sacco_skipped} skipped (total: {total_processed})")
     
     return jobs
 
