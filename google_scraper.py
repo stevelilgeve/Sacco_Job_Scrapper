@@ -127,20 +127,64 @@ def is_valid_deadline(deadline_text):
 def search_google(query):
     """Search Google for jobs"""
     try:
-        # Using a simple search approach
-        search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
-        response = requests.get(search_url, headers=HEADERS, timeout=10)
+        # Using a more reliable search approach
+        search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}&num=20"
+        
+        # More realistic headers
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Accept-Encoding": "gzip, deflate",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+        }
+        
+        response = requests.get(search_url, headers=headers, timeout=15)
         response.raise_for_status()
+        
+        # Debug: Save HTML to file for inspection
+        with open(f"debug_google_{query.replace(' ', '_')}.html", "w", encoding="utf-8") as f:
+            f.write(response.text)
+        log.info(f"Saved debug HTML for query: {query}")
         
         soup = BeautifulSoup(response.text, 'html.parser')
         jobs = []
         
-        # Extract search results
-        for result in soup.select('div.g'):
+        # Try multiple selectors for Google results
+        selectors = [
+            'div.g',           # Standard Google results
+            'div[data-ved]',   # Alternative selector
+            'div.tF2Cxc',      # Newer Google layout
+            'div.hlcw0c'       # Another variant
+        ]
+        
+        results = []
+        for selector in selectors:
+            results = soup.select(selector)
+            if results:
+                break
+        
+        log.info(f"Found {len(results)} search result containers")
+        
+        for result in results:
             try:
-                title_elem = result.select_one('h3')
-                link_elem = result.select_one('a')
-                snippet_elem = result.select_one('[data-snf="nke7zf"]')
+                # Try multiple title selectors
+                title_elem = (result.select_one('h3') or 
+                             result.select_one('h2') or 
+                             result.select_one('[role="heading"]') or
+                             result.select_one('a h3'))
+                
+                # Try multiple link selectors  
+                link_elem = (result.select_one('a[href]') or
+                            result.select_one('a') or
+                            result.select_one('[href]'))
+                
+                # Try multiple snippet selectors
+                snippet_elem = (result.select_one('[data-snf="nke7zf"]') or
+                               result.select_one('.VwiC3b') or
+                               result.select_one('.s') or
+                               result.select_one('.st'))
                 
                 if not title_elem or not link_elem:
                     continue
@@ -152,16 +196,35 @@ def search_google(query):
                 # Clean the link (remove Google redirect)
                 if link.startswith('/url?'):
                     import urllib.parse
-                    link = urllib.parse.parse_qs(link.split('?')[1]).get('q', [link])[0]
+                    try:
+                        parsed = urllib.parse.urlparse(link)
+                        params = urllib.parse.parse_qs(parsed.query)
+                        link = params.get('q', [link])[0]
+                    except:
+                        pass
+                elif link.startswith('/'):
+                    link = "https://www.google.com" + link
                 
-                # Extract employer from title or snippet
+                # Skip Google internal links
+                if 'google.com' in link.lower():
+                    continue
+                
+                # Extract employer from title
                 employer = "Unknown"
+                title_lower = title.lower()
+                snippet_lower = snippet.lower()
+                
                 for keyword in SACCO_KEYWORDS:
-                    if keyword.lower() in title.lower():
+                    if keyword.lower() in title_lower or keyword.lower() in snippet_lower:
                         # Try to extract SACCO name
-                        words = title.lower().split(keyword.lower())
-                        if len(words) > 1:
-                            employer = words[0].strip() + " " + keyword
+                        if keyword.lower() in title_lower:
+                            parts = title_lower.split(keyword.lower())
+                            if len(parts) > 1 and parts[0].strip():
+                                employer = parts[0].strip() + " " + keyword.title()
+                            else:
+                                employer = keyword.title()
+                        else:
+                            employer = keyword.title()
                         break
                 
                 jobs.append({
@@ -173,6 +236,8 @@ def search_google(query):
                     'link': link,
                     'snippet': snippet
                 })
+                
+                log.info(f"  → Found: {title[:50]}...")
                 
             except Exception as e:
                 log.warning(f"Error parsing Google result: {e}")
